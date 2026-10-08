@@ -67,7 +67,23 @@ public class ImportFile {
         this.createdAt = LocalDateTime.now();
     }
 
+    public void markStaging() {
+        if (status != ImportStatus.RECEIVED) {
+            throw new IllegalStateException(
+                    "Only RECEIVED imports can start staging"
+            );
+        }
+
+        this.status = ImportStatus.STAGING;
+    }
+
     public void markProcessing() {
+        if (status != ImportStatus.STAGING) {
+            throw new IllegalStateException(
+                    "Only STAGING imports can start processing"
+            );
+        }
+
         this.status = ImportStatus.PROCESSING;
     }
 

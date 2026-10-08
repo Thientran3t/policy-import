@@ -28,8 +28,8 @@ spring:
 
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
+      max-file-size: 50MB
+      max-request-size: 50MB
 
 
 management:
@@ -43,14 +43,22 @@ management:
 
   endpoint:
     health:
-      probes:
-        enabled: true
+      show-details: when_authorized
+
+    metrics:
+      tags:
+        application: policy-import
 
 
 logging:
   level:
-    com.example.policyimport: INFO
-    org.hibernate.SQL: INFO
+    root: INFO
+    com.interview.policyimport: INFO
+    com.interview.policyimport.repository: WARN
+    org.hibernate.SQL: WARN
+
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
 
 policy-import:
   partners:
@@ -77,3 +85,28 @@ policy-import:
         expiry-date: end_date
         premium: amount
         currency: ccy
+  worker:
+    concurrency: 4
+    batch-size: 200
+    lease-seconds: 300
+    max-attempts: 3
+
+  sftp:
+    enabled: false
+    polling-interval-ms: 60000
+    partners:
+      ACME:
+        host: localhost
+        port: 2222
+        username: partner
+        password: ${SFTP_PASSWORD:partner123}
+        remote-directory: /upload/ACME
+        strict-host-key-checking: false
+
+      TELCO:
+        host: localhost
+        port: 2222
+        username: partner
+        password: ${SFTP_PASSWORD:partner123}
+        remote-directory: /upload/TELCO
+        strict-host-key-checking: false

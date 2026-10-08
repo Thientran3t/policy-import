@@ -26,5 +26,15 @@ services:
       timeout: 5s
       retries: 10
 
+  sftp:
+    image: atmoz/sftp:alpine
+    container_name: policy-import-sftp
+    ports:
+      - "127.0.0.1:2222:22"
+    volumes:
+      - ./sftp-data:/home/partner/upload
+    command: "partner:partner123:1001:1001:upload"
+    restart: unless-stopped
+
 volumes:
   postgres-data:

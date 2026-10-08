@@ -64,6 +64,15 @@ public class ImportRow {
     @Column(name = "processed_at")
     private LocalDateTime processedAt;
 
+    @Column(name = "worker_id", length = 100)
+    private String workerId;
+
+    @Column(name = "lease_until")
+    private LocalDateTime leaseUntil;
+
+    @Column(name = "attempt_count", nullable = false)
+    private int attemptCount = 0;
+
     protected ImportRow() {
     }
 
@@ -93,20 +102,53 @@ public class ImportRow {
     public void markSuccess() {
         this.status = ImportRowStatus.SUCCESS;
         this.processedAt = LocalDateTime.now();
+        clearLease();
     }
 
-    public void markDuplicate(String message) {
-        this.status = ImportRowStatus.DUPLICATE;
-        this.errorCode = "DUPLICATE";
-        this.errorMessage = message;
-        this.processedAt = LocalDateTime.now();
-    }
-
-    public void markFailed(String errorCode, String errorMessage) {
+    public void markFailed(
+            String errorCode,
+            String errorMessage
+    ) {
         this.status = ImportRowStatus.FAILED;
         this.errorCode = errorCode;
         this.errorMessage = errorMessage;
         this.processedAt = LocalDateTime.now();
+        clearLease();
+    }
+
+    public void markDuplicate(String message) {
+        this.status = ImportRowStatus.DUPLICATE;
+        this.errorCode = "DUPLICATE_POLICY";
+        this.errorMessage = message;
+        this.processedAt = LocalDateTime.now();
+        clearLease();
+    }
+
+    private void clearLease() {
+        this.workerId = null;
+        this.leaseUntil = null;
+    }
+
+    public void markProcessing(
+            String workerId,
+            LocalDateTime leaseUntil
+    ) {
+        if (this.status != ImportRowStatus.PENDING
+                && this.status != ImportRowStatus.PROCESSING) {
+            throw new IllegalStateException(
+                    "Cannot claim row with status: " + status
+            );
+        }
+
+        this.status = ImportRowStatus.PROCESSING;
+        this.workerId = workerId;
+        this.leaseUntil = leaseUntil;
+        this.attemptCount++;
+    }
+
+    public void resetForRetry() {
+        this.status = ImportRowStatus.PENDING;
+        clearLease();
     }
 
     public Long getId() {
@@ -155,5 +197,29 @@ public class ImportRow {
 
     public String getErrorMessage() {
         return errorMessage;
+    }
+
+    public String getWorkerId() {
+        return workerId;
+    }
+
+    public void setWorkerId(String workerId) {
+        this.workerId = workerId;
+    }
+
+    public LocalDateTime getLeaseUntil() {
+        return leaseUntil;
+    }
+
+    public void setLeaseUntil(LocalDateTime leaseUntil) {
+        this.leaseUntil = leaseUntil;
+    }
+
+    public int getAttemptCount() {
+        return attemptCount;
+    }
+
+    public void setAttemptCount(int attemptCount) {
+        this.attemptCount = attemptCount;
     }
 }

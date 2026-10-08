@@ -1,9 +1,9 @@
 package com.interview.policyimport.service;
 
-import com.interview.policyimport.entity.Policy;
 import com.interview.policyimport.model.CanonicalEnrollment;
 import com.interview.policyimport.repository.PolicyRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
@@ -16,20 +16,16 @@ public class PolicyService {
         this.policyRepository = policyRepository;
     }
 
+    @Transactional
     public boolean createPolicy(
             String partnerCode,
             CanonicalEnrollment enrollment
     ) {
+        String policyNumber =
+                "POL-" + UUID.randomUUID();
 
-        if (policyRepository.existsByPartnerCodeAndImei(
-                partnerCode,
-                enrollment.imei())) {
-
-            return false;
-        }
-
-        Policy policy = new Policy(
-                "POL-" + UUID.randomUUID(),
+        int inserted = policyRepository.insertIfAbsent(
+                policyNumber,
                 partnerCode,
                 enrollment.imei(),
                 enrollment.planCode(),
@@ -39,8 +35,6 @@ public class PolicyService {
                 enrollment.currency()
         );
 
-        policyRepository.save(policy);
-
-        return true;
+        return inserted == 1;
     }
 }
