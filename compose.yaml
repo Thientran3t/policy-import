@@ -1,0 +1,30 @@
+services:
+
+  postgres:
+    image: postgres:17
+    container_name: policy-import-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: policy_import
+      POSTGRES_USER: policy
+      POSTGRES_PASSWORD: policy
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U policy -d policy_import"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

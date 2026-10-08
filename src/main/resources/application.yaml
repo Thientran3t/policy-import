@@ -1,0 +1,79 @@
+spring:
+  application:
+    name: policy-import-poc
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/policy_import
+    username: policy
+    password: policy
+    driver-class-name: org.postgresql.Driver
+
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+    open-in-view: false
+
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include:
+          - health
+          - info
+          - metrics
+
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+
+logging:
+  level:
+    com.example.policyimport: INFO
+    org.hibernate.SQL: INFO
+
+policy-import:
+  partners:
+    ACME:
+      format: CSV
+      delimiter: ","
+      has-header: true
+      columns:
+        imei: IMEI
+        plan-code: Plan
+        effective-date: Effective Date
+        expiry-date: Expiry Date
+        premium: Premium
+        currency: Currency
+
+    TELCO:
+      format: CSV
+      delimiter: "|"
+      has-header: true
+      columns:
+        imei: device_imei
+        plan-code: product_code
+        effective-date: start_date
+        expiry-date: end_date
+        premium: amount
+        currency: ccy
