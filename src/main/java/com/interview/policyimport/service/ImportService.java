@@ -4,11 +4,9 @@ package com.interview.policyimport.service;
 import com.interview.policyimport.config.PartnerProperties;
 import com.interview.policyimport.entity.ImportFile;
 import com.interview.policyimport.entity.ImportRow;
-import com.interview.policyimport.model.CanonicalEnrollment;
-import com.interview.policyimport.model.ParsedRow;
-import com.interview.policyimport.model.PartnerDefinition;
-import com.interview.policyimport.model.ValidationResult;
+import com.interview.policyimport.model.*;
 import com.interview.policyimport.repository.ImportFileRepository;
+import com.interview.policyimport.repository.ImportRowRepository;
 import com.interview.policyimport.repository.PartnerRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -22,7 +20,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -32,9 +33,13 @@ public class ImportService {
 
     private static final int STAGING_BATCH_SIZE = 500;
 
+    private final Set<Long> activeStaging =
+            ConcurrentHashMap.newKeySet();
+
     private final PartnerRepository partnerRepository;
     private final PartnerProperties partnerProperties;
     private final ImportFileRepository importFileRepository;
+    private final ImportRowRepository importRowRepository;
     private final ImportRowPersistenceService importRowPersistenceService;
     private final PartnerFileParserFactory parserFactory;
     private final EnrollmentValidator enrollmentValidator;
@@ -49,11 +54,34 @@ public class ImportService {
             Path filePath
     ) throws IOException {
 
-        log.info(
-                "Import requested: partnerCode={}, fileName={}",
-                partnerCode,
-                fileName
-        );
+        validatePartner(partnerCode);
+
+        PartnerDefinition definition =
+                partnerProperties.partners().get(partnerCode);
+
+        String fileHash = fileHashService.sha256(filePath);
+
+        ImportFile importFile = importFileRepository
+                .findByPartnerCodeAndFileHash(partnerCode, fileHash)
+                .orElseGet(() -> createImportFile(
+                        partnerCode,
+                        fileName,
+                        fileHash
+                ));
+
+        if (importFile.getStatus() != ImportStatus.STAGING) {
+            log.info(
+                    "Existing import: fileId={}, status={}",
+                    importFile.getId(),
+                    importFile.getStatus()
+            );
+            return importFile;
+        }
+
+        return continueImport(importFile, filePath, definition);
+    }
+
+    private void validatePartner(String partnerCode) {
 
         var partner = partnerRepository.findByCode(partnerCode)
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -66,56 +94,71 @@ public class ImportService {
             );
         }
 
-        PartnerDefinition definition =
-                partnerProperties.partners().get(partnerCode);
-
-        if (definition == null) {
+        if (!partnerProperties.partners().containsKey(partnerCode)) {
             throw new IllegalArgumentException(
-                    "Missing file mapping for partner: " + partnerCode
+                    "Missing file mapping: " + partnerCode
             );
         }
+    }
 
-        String fileHash = fileHashService.sha256(filePath);
+    private ImportFile createImportFile(
+            String partnerCode,
+            String fileName,
+            String fileHash
+    ) {
 
-        var existing = importFileRepository
-                .findByPartnerCodeAndFileHash(partnerCode, fileHash);
-
-        if (existing.isPresent()) {
-            ImportFile file = existing.get();
-
-            log.info(
-                    "Existing import detected: fileId={}, partnerCode={}, status={}",
-                    file.getId(),
-                    partnerCode,
-                    file.getStatus()
-            );
-
-            return file;
-        }
-
-        ImportFile importFile = new ImportFile(
+        ImportFile file = new ImportFile(
                 partnerCode,
                 fileName,
                 fileHash
         );
 
-        importFile = importFileRepository.saveAndFlush(importFile);
+        file.markStaging();
 
-        importFile.markStaging();
-        importFile = importFileRepository.saveAndFlush(importFile);
-
-        Long fileId = importFile.getId();
-        long importStart = System.nanoTime();
+        file = importFileRepository.saveAndFlush(file);
 
         log.info(
-                "CSV staging started: fileId={}, partnerCode={}",
-                fileId,
+                "Import created: fileId={}, partner={}",
+                file.getId(),
                 partnerCode
         );
 
-        long stagingStart = System.nanoTime();
+        return file;
+    }
+
+    private ImportFile continueImport(
+            ImportFile importFile,
+            Path filePath,
+            PartnerDefinition definition
+    ) throws IOException {
+
+        Long fileId = importFile.getId();
+        String partnerCode = importFile.getPartnerCode();
+
+        if (!activeStaging.add(fileId)) {
+            log.info(
+                    "Staging already active: fileId={}",
+                    fileId
+            );
+            return importFile;
+        }
+
+        long importStart = System.nanoTime();
 
         try {
+            int deleted = importRowRepository
+                    .deleteAllByImportFileId(fileId);
+
+            if (deleted > 0) {
+                log.info(
+                        "Removed partial staging rows: fileId={}, deleted={}",
+                        fileId,
+                        deleted
+                );
+            }
+
+            long stagingStart = System.nanoTime();
+
             int stagedRows = stageRows(
                     importFile,
                     filePath,
@@ -123,55 +166,40 @@ public class ImportService {
             );
 
             log.info(
-                    "CSV staging completed: fileId={}, rows={}, durationMs={}",
+                    "Staging completed: fileId={}, rows={}, durationMs={}",
                     fileId,
                     stagedRows,
                     elapsedMs(stagingStart)
             );
 
-        } catch (Exception e) {
-            log.error(
-                    "CSV staging failed: fileId={}, partnerCode={}",
-                    fileId,
-                    partnerCode,
-                    e
-            );
-
-            importFile.fail();
+            // Full staging is complete.
+            importFile.markProcessing();
             importFileRepository.saveAndFlush(importFile);
 
-            meterRegistry.counter(
-                    "policy.import.failed",
-                    "partner", partnerCode
-            ).increment();
+        } catch (Exception ex) {
+            log.error(
+                    "Staging failed: fileId={}. "
+                            + "Import remains STAGING for SFTP retry.",
+                    fileId,
+                    ex
+            );
 
-            recordDuration(importStart, partnerCode);
-
-            if (e instanceof IOException ioException) {
+            if (ex instanceof IOException ioException) {
                 throw ioException;
             }
 
-            if (e instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-
             throw new IllegalStateException(
-                    "CSV staging failed: fileId=" + fileId,
-                    e
+                    "Staging failed: fileId=" + fileId,
+                    ex
             );
+
+        } finally {
+            activeStaging.remove(fileId);
         }
 
-        importFile.markProcessing();
-        importFileRepository.saveAndFlush(importFile);
-
-        log.info(
-                "Import transitioned to PROCESSING: fileId={}",
-                fileId
-        );
-
-        long processingStart = System.nanoTime();
-
         try {
+            long processingStart = System.nanoTime();
+
             parallelImportProcessor.process(fileId);
 
             log.info(
@@ -196,24 +224,23 @@ public class ImportService {
                 );
             } else {
                 log.warn(
-                        "Import has outstanding rows: fileId={}. Recovery will continue.",
+                        "Import has outstanding rows: fileId={}. "
+                                + "Recovery will continue.",
                         fileId
                 );
             }
 
-        } catch (Exception e) {
+        } catch (Exception ex) {
             log.error(
-                    "Policy processing interrupted: fileId={}, partnerCode={}. "
+                    "Processing interrupted: fileId={}. "
                             + "Import remains PROCESSING for recovery.",
                     fileId,
-                    partnerCode,
-                    e
+                    ex
             );
 
-            // Keep PROCESSING for automatic recovery.
             throw new IllegalStateException(
-                    "Policy processing interrupted: fileId=" + fileId,
-                    e
+                    "Processing failed: fileId=" + fileId,
+                    ex
             );
 
         } finally {
@@ -221,9 +248,7 @@ public class ImportService {
         }
 
         return importFileRepository.findById(fileId)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Import file not found: " + fileId
-                ));
+                .orElseThrow();
     }
 
     private int stageRows(
@@ -240,9 +265,12 @@ public class ImportService {
         PartnerFileParser parser =
                 parserFactory.getParser(definition.format());
 
-        try (InputStream inputStream = Files.newInputStream(filePath);
-             Stream<ParsedRow> rows =
-                     parser.parse(inputStream, definition)) {
+        try (
+                InputStream inputStream =
+                        Files.newInputStream(filePath);
+                Stream<ParsedRow> rows =
+                        parser.parse(inputStream, definition)
+        ) {
 
             for (ParsedRow parsedRow :
                     (Iterable<ParsedRow>) rows::iterator) {
@@ -258,38 +286,24 @@ public class ImportService {
                 if (batch.size() >= STAGING_BATCH_SIZE) {
                     importRowPersistenceService.saveBatch(batch);
                     batch.clear();
-
-                    log.debug(
-                            "Staging batch committed: fileId={}, totalRows={}",
-                            importFile.getId(),
-                            totalRows
-                    );
                 }
             }
 
             if (!batch.isEmpty()) {
                 importRowPersistenceService.saveBatch(batch);
-
-                log.debug(
-                        "Final staging batch committed: fileId={}, batchSize={}",
-                        importFile.getId(),
-                        batch.size()
-                );
             }
         }
 
         return totalRows;
     }
 
-    /**
-     * Converts parsed data into a staging row.
-     * Invalid rows are recorded as FAILED.
-     */
     private ImportRow buildImportRow(
             ImportFile importFile,
             ParsedRow parsedRow
     ) {
-        CanonicalEnrollment enrollment = parsedRow.enrollment();
+
+        CanonicalEnrollment enrollment =
+                parsedRow.enrollment();
 
         ImportRow row = new ImportRow(
                 importFile,
@@ -314,24 +328,18 @@ public class ImportService {
                 enrollmentValidator.validate(enrollment);
 
         if (!validation.isValid()) {
-            String errorMessage = validation.errors()
-                    .stream()
-                    .map(error -> error.message())
-                    .reduce((first, second) -> first + "; " + second)
-                    .orElse("Validation failed");
 
-            row.markFailed(
-                    "VALIDATION_ERROR",
-                    errorMessage
-            );
+            String message = validation.errors()
+                    .stream()
+                    .map(ValidationError::message)
+                    .collect(Collectors.joining("; "));
+
+            row.markFailed("VALIDATION_ERROR", message);
         }
 
         return row;
     }
 
-    /**
-     * Records import duration in Micrometer.
-     */
     private void recordDuration(
             long startNanos,
             String partnerCode

@@ -1,172 +1,111 @@
-# Partner Policy Import — Setup & Run
+# Partner Policy Enrollment Import
+
+A Java application that imports partner enrollment CSV files through REST or SFTP and creates insurance policies.
+
+## Tech stack
+
+- Java 21
+- Spring Boot 3.x (Spring Web, Spring Data JPA, Spring Integration SFTP, Actuator)
+- PostgreSQL
+- Flyway
+- Apache Commons CSV
+- Micrometer
+- Docker and Docker Compose
+- JUnit 5 and Testcontainers (integration testing)
 
 ## Prerequisites
 
-- Java 21
-- Maven 3.9+
-- Docker Engine or Docker Desktop with Docker Compose v2
-- PostgreSQL is provided by the project Docker Compose configuration (or an existing local instance)
+- JDK 21
+- Docker with Docker Compose
+- Maven or the Maven wrapper included in the project
+- An SFTP client (`sftp` command or a GUI client)
 
-## 1. Start PostgreSQL with Docker Compose
+## 1. Start PostgreSQL
 
-The project includes a Docker Compose file at its root. From the project directory, run:
+PostgreSQL and SFTP are defined in the same `docker-compose.yml`. Start both services together:
 
 ```bash
 docker compose up -d
 ```
 
-Check container status and logs:
+Create/configure the application database and set the Spring datasource URL, username, and password in your local configuration. Flyway applies the database migrations on application startup.
 
-```bash
-docker compose ps
-docker compose logs -f
-```
+## 2. Local SFTP server
 
-The database container must be running and ready before starting Spring Boot. Check the Compose file for the actual PostgreSQL port, database name, username, and password. The examples below assume it exposes port `5432` on your host and uses database `policy_import` with username/password `postgres`.
+For local testing, the example SFTP connection uses `localhost:2222` with username `partner` and password `partner123`. Check the port and credentials in your actual Compose configuration before connecting.
 
-Configure the matching datasource settings in `src/main/resources/application.yml` (or use environment variables):
+## 3. Configure Spring Boot
+
+Configure the PostgreSQL datasource and partner CSV mappings in `application.yml` or your local profile. For local SFTP polling, use the property names defined in your `SftpProperties` class. Example:
 
 ```yaml
-spring:
-  datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/policy_import}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
-  servlet:
-    multipart:
-      max-file-size: 50MB
-      max-request-size: 50MB
+policy-import:
+  sftp:
+    enabled: true
+    partners:
+      ACME:
+        host: localhost
+        port: 2222
+        username: partner
+        password: ${SFTP_PASSWORD:partner123}
+        remote-directory: /upload/ACME
+        strict-host-key-checking: false
+      TELCO:
+        host: localhost
+        port: 2222
+        username: partner
+        password: ${SFTP_PASSWORD:partner123}
+        remote-directory: /upload/TELCO
+        strict-host-key-checking: false
 ```
 
-If the Compose file does not create the `policy_import` database, set its `POSTGRES_DB` environment variable accordingly or create the database manually. Merge these settings with your existing YAML rather than duplicating keys.
+Merge this with the existing `policy-import` section; do not duplicate the root YAML key. Confirm the actual configuration structure matches your code. If the application runs in the same Docker Compose network, use `sftp:22` instead of `localhost:2222`. Disable host-key verification **only in local testing**.
 
-Flyway migrations create the application tables and seed sample partners (`ACME` and `TELCO`) when Spring Boot starts.
+## 4. Run the application
 
-To stop the containers without deleting database data:
+```bash
+./mvnw spring-boot:run
+```
+
+If the project does not include a Maven wrapper, use `mvn spring-boot:run`. The API is expected at `http://localhost:8080` with the default port.
+
+## 5. Test HTTP import
+
+```bash
+curl -X POST "http://localhost:8080/api/imports/ACME" \
+  -F "file=@src/test/resources/files/acme-policy.csv"
+
+# Replace 1 with the returned import ID
+curl "http://localhost:8080/api/imports/1"
+curl "http://localhost:8080/api/imports/1/errors?page=0&size=50"
+```
+
+## 6. Test SFTP import
+
+Connect to the local SFTP server:
+
+```bash
+sftp -P 2222 partner@localhost
+```
+
+Enter password `partner123`, then run:
+
+```text
+cd upload
+mkdir ACME
+mkdir TELCO
+cd ACME
+put src/test/resources/files/acme-policy.csv
+ls
+bye
+```
+
+If the `put` command cannot find the local CSV, use `lpwd` and `lcd` inside the SFTP client or supply an absolute local path. Skip `mkdir` if the folders already exist. Wait for the application's configured SFTP poll, check the logs, and query the import status endpoint. The incoming file should remain available until processing completes so an interrupted staging attempt can be retried.
+
+## 7. Stop local services
 
 ```bash
 docker compose down
 ```
 
-**Warning:** `docker compose down -v` also deletes Compose-managed volumes and can erase your local database data.
-
-## 2. Configure partner file mappings
-
-Make sure your existing `policy-import.partners` configuration includes `ACME` and `TELCO`. Example:
-
-```yaml
-policy-import:
-  partners:
-    ACME:
-      format: CSV
-      delimiter: ","
-      has-header: true
-      columns:
-        imei: IMEI
-        plan-code: Plan
-        effective-date: Effective Date
-        expiry-date: Expiry Date
-        premium: Premium
-        currency: Currency
-    TELCO:
-      format: CSV
-      delimiter: "|"
-      has-header: true
-      columns:
-        imei: device_imei
-        plan-code: product_code
-        effective-date: start_date
-        expiry-date: end_date
-        premium: amount
-        currency: ccy
-  worker:
-    concurrency: 4
-    batch-size: 200
-    lease-seconds: 300
-    max-attempts: 3
-  recovery:
-    enabled: true
-  recovery-interval-ms: 60000
-```
-
-Merge this with your existing configuration; do not create a second `policy-import` root section.
-
-## 3. Build and start Spring Boot
-
-From the project root:
-
-```bash
-mvn clean package -DskipTests
-mvn spring-boot:run
-```
-
-By default, the application listens on `http://localhost:8080` unless you configured a different port.
-
-## 4. Prepare a sample CSV
-
-Save this as `sample_acme.csv`:
-
-```csv
-IMEI,Plan,Effective Date,Expiry Date,Premium,Currency
-351234567890123,PLAN_A,2026-10-01,2027-09-30,100.00,USD
-351234567890124,PLAN_A,2026-10-01,2027-09-30,150.00,USD
-```
-
-## 5. Upload and check an import
-
-Upload the CSV:
-
-```bash
-curl -X POST http://localhost:8080/api/imports/ACME \
-  -F "file=@sample_acme.csv"
-```
-
-The response includes the import ID and status. Replace `1` below with the returned ID.
-
-Check import status:
-
-```bash
-curl http://localhost:8080/api/imports/1
-```
-
-Retrieve failed rows (paginated):
-
-```bash
-curl "http://localhost:8080/api/imports/1/errors?page=0&size=50"
-```
-
-The upload request currently waits for processing to finish. Re-uploading identical file content for the same partner returns the existing import.
-
-## 6. Health and metrics
-
-If Spring Boot Actuator is configured to expose these endpoints:
-
-```bash
-curl http://localhost:8080/actuator/health
-curl http://localhost:8080/actuator/metrics
-curl http://localhost:8080/actuator/metrics/policy.import.duration
-```
-
-## 7. Run integration tests
-
-Ensure Docker is running, then run:
-
-```bash
-mvn test -Dtest=ImportServiceIT
-```
-
-If you have a separate recovery test class:
-
-```bash
-mvn test -Dtest=ImportCrashRecoveryIT
-```
-
-Testcontainers starts a temporary PostgreSQL container for integration tests.
-
-## 8. Troubleshooting
-
-- **Database connection refused:** run `docker compose ps` and `docker compose logs`, then verify the datasource URL, published port, and credentials match the Compose configuration.
-- **Unknown partner:** confirm the partner is seeded in the database and has a matching `policy-import.partners` mapping.
-- **File upload rejected:** check the configured multipart file-size limits.
-- **Testcontainers cannot connect:** start Docker before running integration tests.
-- **Metrics endpoint returns 404:** check the Actuator dependency and endpoint exposure settings; a custom metric appears after it has been recorded.
+Avoid `docker compose down -v` if you want to preserve PostgreSQL data.

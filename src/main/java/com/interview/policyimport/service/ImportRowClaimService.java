@@ -22,14 +22,11 @@ public class ImportRowClaimService {
     }
 
     public List<Long> claimNextBatch(
-            Long fileId,
-            String workerId
+            Long fileId
     ) {
         return claimRepository.claimRows(
                 fileId,
-                workerId,
-                properties.batchSize(),
-                Duration.ofSeconds(properties.leaseSeconds())
+                properties.batchSize()
         );
     }
 }

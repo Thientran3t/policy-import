@@ -11,10 +11,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -30,9 +32,6 @@ public class ImportController {
     private final ImportFileRepository importFileRepository;
     private final ImportRowRepository importRowRepository;
 
-    /**
-     * Upload and process a partner enrollment file.
-     */
     @PostMapping(
             value = "/{partnerCode}",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
@@ -87,16 +86,14 @@ public class ImportController {
         }
     }
 
-    /**
-     * Retrieve import status and summary.
-     */
     @GetMapping("/{fileId}")
     public ResponseEntity<ImportResponse> getImport(
             @PathVariable Long fileId
     ) {
         ImportFile importFile = importFileRepository
                 .findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException(
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
                         "Import file not found: " + fileId
                 ));
 
@@ -105,9 +102,6 @@ public class ImportController {
         );
     }
 
-    /**
-     * Retrieve row-level validation and processing errors.
-     */
     @GetMapping("/{fileId}/errors")
     public ResponseEntity<Page<ImportRowErrorResponse>> getErrors(
             @PathVariable Long fileId,

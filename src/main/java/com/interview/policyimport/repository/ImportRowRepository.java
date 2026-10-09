@@ -9,6 +9,8 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -38,5 +40,16 @@ public interface ImportRowRepository
     List<ImportRow> findAllByIdForUpdate(
             @Param("ids") List<Long> ids
     );
+
+    @Modifying
+    @Transactional
+    @Query(
+            value = """
+        DELETE FROM import_row
+        WHERE file_id = :fileId
+        """,
+            nativeQuery = true
+    )
+    int deleteAllByImportFileId(@Param("fileId") Long fileId);
 
 }

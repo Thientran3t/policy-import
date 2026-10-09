@@ -92,7 +92,7 @@ policy-import:
     max-attempts: 3
 
   sftp:
-    enabled: false
+    enabled: true
     polling-interval-ms: 60000
     partners:
       ACME:
@@ -110,3 +110,5 @@ policy-import:
         password: ${SFTP_PASSWORD:partner123}
         remote-directory: /upload/TELCO
         strict-host-key-checking: false
+  recovery:
+    enabled: false

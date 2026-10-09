@@ -5,7 +5,6 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.util.List;
 
 @Repository
@@ -22,9 +21,7 @@ public class ImportRowClaimRepository {
     @Transactional
     public List<Long> claimRows(
             Long fileId,
-            String workerId,
-            int batchSize,
-            Duration leaseDuration
+            int batchSize
     ) {
         if (batchSize <= 0) {
             throw new IllegalArgumentException(
@@ -32,38 +29,27 @@ public class ImportRowClaimRepository {
             );
         }
 
-        if (leaseDuration.isZero() || leaseDuration.isNegative()) {
-            throw new IllegalArgumentException(
-                    "leaseDuration must be positive"
-            );
-        }
-
         String sql = """
-                WITH candidates AS (
-                    SELECT id
-                    FROM import_row
-                    WHERE file_id = :fileId
-                      AND status = 'PENDING'
-                    ORDER BY id
-                    LIMIT :batchSize
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE import_row AS r
-                SET status = 'PROCESSING',
-                    worker_id = :workerId,
-                    lease_until = CURRENT_TIMESTAMP
-                        + (:leaseSeconds * INTERVAL '1 second'),
-                    attempt_count = attempt_count + 1
-                FROM candidates
-                WHERE r.id = candidates.id
-                RETURNING r.id
+                WITH claimed AS (
+                      SELECT id
+                      FROM import_row
+                      WHERE file_id = :fileId
+                        AND status = 'PENDING'
+                      ORDER BY id
+                      LIMIT :batchSize
+                      FOR UPDATE SKIP LOCKED
+                  )
+                  UPDATE import_row r
+                  SET status = 'PROCESSING',
+                      attempt_count = attempt_count + 1
+                  FROM claimed
+                  WHERE r.id = claimed.id
+                  RETURNING r.id;
                 """;
 
         var params = new MapSqlParameterSource()
                 .addValue("fileId", fileId)
-                .addValue("workerId", workerId)
-                .addValue("batchSize", batchSize)
-                .addValue("leaseSeconds", leaseDuration.toSeconds());
+                .addValue("batchSize", batchSize);
 
         return jdbcTemplate.query(
                 sql,

@@ -5,6 +5,7 @@ import com.interview.policyimport.config.SftpProperties;
 import com.interview.policyimport.config.SftpProperties.PartnerSftpConfig;
 import com.interview.policyimport.entity.ImportFile;
 import com.interview.policyimport.model.ImportStatus;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.sshd.sftp.client.SftpClient;
@@ -34,6 +35,7 @@ public class SftpPollingService {
 
     private final SftpProperties properties;
     private final ImportService importService;
+    private final MeterRegistry meterRegistry;
 
     private final AtomicBoolean polling = new AtomicBoolean(false);
 
@@ -66,6 +68,10 @@ public class SftpPollingService {
                 try {
                     pollPartner(partnerCode, config);
                 } catch (Exception e) {
+                    meterRegistry.counter(
+                            "policy.import.sftp.poll.failures",
+                            "partner", partnerCode
+                    ).increment();
                     log.error(
                             "SFTP polling failed for partner={}",
                             partnerCode,

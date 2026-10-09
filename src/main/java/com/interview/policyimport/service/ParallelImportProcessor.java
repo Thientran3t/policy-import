@@ -42,11 +42,9 @@ public class ParallelImportProcessor {
                 new ArrayList<>();
 
         for (int i = 0; i < properties.concurrency(); i++) {
-            String workerId = UUID.randomUUID().toString();
-
             futures.add(
                     CompletableFuture.runAsync(
-                            () -> runWorker(fileId, workerId),
+                            () -> runWorker(fileId),
                             executor
                     )
             );
@@ -65,12 +63,11 @@ public class ParallelImportProcessor {
     }
 
     private void runWorker(
-            Long fileId,
-            String workerId
+            Long fileId
     ) {
         while (true) {
             List<Long> rowIds =
-                    claimService.claimNextBatch(fileId, workerId);
+                    claimService.claimNextBatch(fileId);
 
             if (rowIds.isEmpty()) {
                 return;
@@ -78,7 +75,6 @@ public class ParallelImportProcessor {
 
             batchProcessor.processBatch(
                     fileId,
-                    workerId,
                     rowIds
             );
         }

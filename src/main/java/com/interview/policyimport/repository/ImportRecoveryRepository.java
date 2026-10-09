@@ -20,11 +20,8 @@ public class ImportRecoveryRepository {
     public int recoverExpiredRows(int maxAttempts) {
         String sql = """
                 UPDATE import_row
-                SET status = 'PENDING',
-                    worker_id = NULL,
-                    lease_until = NULL
+                SET status = 'PENDING'
                 WHERE status = 'PROCESSING'
-                  AND lease_until < CURRENT_TIMESTAMP
                   AND attempt_count < :maxAttempts
                 """;
 
@@ -40,13 +37,10 @@ public class ImportRecoveryRepository {
         String sql = """
                 UPDATE import_row
                 SET status = 'FAILED',
-                    worker_id = NULL,
-                    lease_until = NULL,
                     error_code = 'MAX_RETRIES_EXCEEDED',
                     error_message = 'Maximum processing attempts exceeded',
                     processed_at = CURRENT_TIMESTAMP
                 WHERE status = 'PROCESSING'
-                  AND lease_until < CURRENT_TIMESTAMP
                   AND attempt_count >= :maxAttempts
                 """;
 

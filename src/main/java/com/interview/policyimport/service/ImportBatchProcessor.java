@@ -9,7 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 @Slf4j
@@ -23,13 +22,12 @@ public class ImportBatchProcessor {
     @Transactional
     public void processBatch(
             Long fileId,
-            String workerId,
             List<Long> rowIds
     ) {
         if (rowIds == null || rowIds.isEmpty()) {
             log.debug(
-                    "Skipping empty batch: fileId={}, workerId={}",
-                    fileId, workerId
+                    "Skipping empty batch: fileId={}",
+                    fileId
             );
             return;
         }
@@ -37,8 +35,8 @@ public class ImportBatchProcessor {
         long start = System.nanoTime();
 
         log.debug(
-                "Processing batch: fileId={}, workerId={}, batchSize={}",
-                fileId, workerId, rowIds.size()
+                "Processing batch: fileId={}, batchSize={}",
+                fileId, rowIds.size()
         );
 
         // Lock rows so recovery or another worker cannot modify
@@ -58,7 +56,7 @@ public class ImportBatchProcessor {
         for (ImportRow row : rows) {
 
             // Validate claim ownership before processing.
-            validateOwnership(row, fileId, workerId);
+            validateOwnership(row, fileId);
 
             CanonicalEnrollment enrollment = new CanonicalEnrollment(
                     row.getImei(),
@@ -92,9 +90,8 @@ public class ImportBatchProcessor {
                 (System.nanoTime() - start) / 1_000_000;
 
         log.info(
-                "Batch processed: fileId={}, workerId={}, total={}, success={}, duplicate={}, durationMs={}",
+                "Batch processed: fileId={}, total={}, success={}, duplicate={}, durationMs={}",
                 fileId,
-                workerId,
                 rows.size(),
                 successCount,
                 duplicateCount,
@@ -104,8 +101,7 @@ public class ImportBatchProcessor {
 
     private void validateOwnership(
             ImportRow row,
-            Long fileId,
-            String workerId
+            Long fileId
     ) {
         if (!row.getFile().getId().equals(fileId)) {
             throw new IllegalStateException(
@@ -114,17 +110,12 @@ public class ImportBatchProcessor {
             );
         }
 
-        if (row.getStatus() != ImportRowStatus.PROCESSING
-                || !workerId.equals(row.getWorkerId())
-                || row.getLeaseUntil() == null
-                || !row.getLeaseUntil().isAfter(LocalDateTime.now())) {
+        if (row.getStatus() != ImportRowStatus.PROCESSING) {
 
             log.warn(
-                    "Invalid or expired row claim: fileId={}, rowId={}, workerId={}, actualWorkerId={}, status={}",
+                    "Invalid or expired row claim: fileId={}, rowId={}, status={}",
                     fileId,
                     row.getId(),
-                    workerId,
-                    row.getWorkerId(),
                     row.getStatus()
             );
 
